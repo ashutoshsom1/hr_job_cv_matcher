@@ -205,13 +205,20 @@ async def process_job_description_and_candidates(
         social_skill_result = social_skill_results[source]
         match_skills_profile = None
 
-        # Process skills
-        if "function" in skill_result:
-            match_skills_profile: MatchSkillsProfile = skill_result["function"]
-        elif isinstance(skill_result, MatchSkillsProfile):
-            logger.info("skill_result is MatchSkillsProfile: %s", skill_result)
-            match_skills_profile: MatchSkillsProfile = skill_result
-        if match_skills_profile is None:
+        try:
+            if "function" in skill_result:
+                match_skills_profile: MatchSkillsProfile = skill_result["function"]
+            elif isinstance(skill_result, MatchSkillsProfile):
+                match_skills_profile: MatchSkillsProfile = skill_result
+            else:
+                logger.warning(f"Unexpected skill_result format: {type(skill_result)}")
+                continue
+            
+            if match_skills_profile is None:
+                logger.warning("No match_skills_profile found")
+                continue
+        except Exception as e:
+            logger.error(f"Error processing skill result: {e}")
             continue
 
         logger.info("Matching skills: %a", match_skills_profile)
@@ -258,56 +265,58 @@ async def process_job_description_and_candidates(
 
 async def process_career_llm_chain(input_list, sources) -> dict:
     education_llm_chain = create_education_chain()
-    education_results_msg = cl.Message(
-        content="",
-        prompt=education_llm_chain.prompt.format(
-            job_description="'job description'", cv="'CV'"
-        ),
+    education_results_msg = cl.Message(content="")
+    
+    _, education_results = await process_generic_extraction(
+        input_list,
+        education_llm_chain,
+        sources,
+        education_results_msg,
+        "career"
     )
-    await education_results_msg.stream_token(
-        "Started career extraction. Please wait ...\n\n"
-    )
-    education_results = {}
-    for input, source in zip(input_list, sources):
-        source_name = source.name
-        await education_results_msg.stream_token(f"Processing {source_name}.\n\n")
-        education_results[source] = await education_llm_chain.arun(input)
-    await education_results_msg.stream_token("Finished career extraction\n\n")
-    await education_results_msg.send()
+    
     return education_results
 
 
 async def process_generic_extraction(
-    input_list: List[str],
+    input_list: List[Dict],
     llm_chain: LLMChain,
     sources: List[str],
-    parameters: dict,
-    task_name: str,
-) -> Tuple[cl.Message, dict]:
-    results_msg = cl.Message(content="", prompt=llm_chain.prompt.format(**parameters))
-    await results_msg.stream_token(
-        f"Started {task_name} extraction. Please wait ...\n\n"
-    )
-    results = {}
-    for input, source in zip(input_list, sources):
+    msg_prefix: str = "",
+    author: str = "LLM"  # Add default author parameter
+) -> Tuple[str, Dict]:
+    # Convert string to Path object
+    source_paths = [Path(source) for source in sources]
+    source_dict = {}
+    
+    for input_item, source in zip(input_list, source_paths):
         source_name = source.name
-        await results_msg.stream_token(f"Processing {source_name}.\n\n")
-        logger.info("Chain input for %s: %s", task_name, input.keys())
-        results[source] = await llm_chain.arun(input)
-    await results_msg.stream_token(f"Finished {task_name} extraction.\n\n")
-    await results_msg.send()
-    return results_msg, results
+        await cl.Message(
+            content=f"{msg_prefix} Processing {source_name}. Please wait ...",
+            author=author  # Use the author parameter
+        ).send()
+        try:
+            result = await asyncify(llm_chain.predict)(
+                **input_item
+            )
+            source_dict[source_name] = result
+        except Exception as e:
+            logger.error(f"Error processing {source_name}: {e}")
+            source_dict[source_name] = None
+
+    return msg_prefix, source_dict
 
 
 async def process_skills_llm_chain(
-    input_list: List[str], profile_llm_chain: LLMChain, sources: List[str]
-) -> Tuple[cl.Message, dict]:
+    input_list: List[Dict],
+    profile_llm_chain: LLMChain,
+    sources: List[str]
+) -> Tuple[str, Dict]:
     return await process_generic_extraction(
         input_list,
         profile_llm_chain,
         sources,
-        {"job_description": "'job description'", "cv": "'CV'"},
-        "technical skill",
+        "Skills extraction"  # msg_prefix
     )
 
 

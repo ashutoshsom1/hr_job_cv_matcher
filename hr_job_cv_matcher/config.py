@@ -1,12 +1,12 @@
 from pathlib import Path
 import os
 
-from langchain.chat_models import ChatOpenAI
+from langchain.chat_models import AzureChatOpenAI  # Changed import
 from dotenv import load_dotenv
 
 from hr_job_cv_matcher.log_init import logger
 
-load_dotenv()
+load_dotenv(r"code.env")
 
 
 def create_if_not_exists(path: Path):
@@ -15,15 +15,27 @@ def create_if_not_exists(path: Path):
 
 
 class Config:
-    model = os.getenv("OPENAI_MODEL")
-    request_timeout = int(os.getenv("REQUEST_TIMEOUT"))
+    # Azure OpenAI settings
+    api_key = os.getenv("KEY")
+    endpoint = os.getenv("ENDPOINT")
+    api_version = os.getenv("API_VERSION")
+    model = os.getenv("LLM_MODEL_NAME")
+    
+    request_timeout = int(os.getenv("REQUEST_TIMEOUT", "120"))
     has_langchain_cache = os.getenv("LANGCHAIN_CACHE") == "true"
-    llm = ChatOpenAI(
-        model=model,
+    
+    # Initialize Azure OpenAI
+    llm = AzureChatOpenAI(
+        openai_api_base=endpoint,
+        openai_api_version=api_version,
+        deployment_name=model,  # In Azure, we use deployment name instead of model name
+        openai_api_key=api_key,
+        openai_api_type="azure",
         temperature=0,
         request_timeout=request_timeout,
         cache=has_langchain_cache,
     )
+    
     remote_pdf_server = os.getenv("REMOTE_PDF_SERVER")
     temp_doc_location = Path(os.getenv("TEMP_DOC_LOCATION"))
     create_if_not_exists(temp_doc_location)

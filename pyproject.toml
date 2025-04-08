@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "hr_job_cv_matcher"}]
 
 [tool.poetry.dependencies]
-python = "3.11.4"
+python = "3.11.11"
 chainlit = "^0.6.2"
 langchain = "^0.0.259"
 openai = "^0.27.8"
