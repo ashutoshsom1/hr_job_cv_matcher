@@ -100,12 +100,49 @@ async def render_ranking(
     for jd_source, sorted_candidate_profiles in sorted_candidate_profiles_dict.items():
         doc = source_document_dict[jd_source]
         await display_uploaded_job_description(doc)
-        ranking_message = "## Ranking"
+        
+        ranking_message = "## Ranking\n"
+        elements = []
+        
         for i, profile in enumerate(sorted_candidate_profiles):
             path = Path(profile.source)
-            ranking_message += f"\n{i + 1}. {path.name}: **{profile.score}** points"
+            
+            # Check if file exists in original location
+            if not path.exists():
+                # Try to find the file in the temp directory
+                temp_path = Path(cfg.temp_doc_location) / path.name
+                if temp_path.exists():
+                    path = temp_path
+                else:
+                    # If file not found, just show the name without link
+                    ranking_message += f"\n{i + 1}. {path.stem}: **{profile.score}** points"
+                    logger.warning(f"PDF file not found: {path}")
+                    continue
+            
+            try:
+                # Add PDF element for each candidate
+                elements.append(
+                    cl.Pdf(
+                        name=f"cv_{i+1}",
+                        display="inline",
+                        path=str(path.absolute())
+                    )
+                )
+                # Create markdown link to the PDF
+                ranking_message += f"\n{i + 1}. [{path.stem}](click:cv_{i+1}): **{profile.score}** points"
+            except Exception as e:
+                # If there's any error adding the PDF, just show the name without link
+                ranking_message += f"\n{i + 1}. {path.stem}: **{profile.score}** points"
+                logger.error(f"Error adding PDF {path}: {str(e)}")
 
-        await render_barchart_image(ranking_message, sorted_candidate_profiles)
+        # Only send elements if we have any
+        if elements:
+            await cl.Message(
+                content=ranking_message,
+                elements=elements
+            ).send()
+        else:
+            await cl.Message(content=ranking_message).send()
 
         breakdown_msg_id = await cl.Message(content=f"### Breakdown").send()
         await render_breakdown(sorted_candidate_profiles, breakdown_msg_id)
@@ -115,16 +152,64 @@ async def render_breakdown(
     sorted_candidate_profiles: List[CandidateProfile], breakdown_msg_id: str
 ):
     for profile in sorted_candidate_profiles:
-        skills = profile.matched_skills_profile
+        # Get candidate name from the source file
+        candidate_name = Path(profile.source).stem
+        
+        # Create a header for each candidate
+        await cl.Message(
+            content=f"## 📋 Candidate Profile: {candidate_name}",
+            author=HR_ASSISTANT,
+            parent_id=breakdown_msg_id
+        ).send()
+
+        # Render PDF
         await render_pdf(profile, breakdown_msg_id)
+        
+        skills = profile.matched_skills_profile
         if skills:
-            msg_id = await render_scoring(skills, breakdown_msg_id)
+            # Skills Analysis Section
+            skills_header = f"""### 🎯 Skills Analysis
+            """
+            msg_id = await cl.Message(
+                content=skills_header,
+                author=HR_ASSISTANT,
+                parent_id=breakdown_msg_id
+            ).send()
+            
+            await render_scoring(skills, msg_id)
             await render_skills(skills, msg_id=msg_id)
+
         education_career_profile = profile.education_career_profile
         if education_career_profile:
-            await render_education(education_career_profile, breakdown_msg_id)
+            # Education & Experience Section
+            education_header = f"""### 📚 Education & Experience
+            """
+            edu_msg_id = await cl.Message(
+                content=education_header,
+                author=HR_ASSISTANT,
+                parent_id=breakdown_msg_id
+            ).send()
+            
+            await render_education(education_career_profile, edu_msg_id)
+
         if skills and education_career_profile:
-            await render_score(profile, breakdown_msg_id)
+            # Overall Assessment Section
+            assessment_header = f"""### 📊 Overall Assessment
+            """
+            assessment_msg_id = await cl.Message(
+                content=assessment_header,
+                author=HR_ASSISTANT,
+                parent_id=breakdown_msg_id
+            ).send()
+            
+            await render_score(profile, assessment_msg_id)
+
+        # Add a separator between candidates
+        await cl.Message(
+            content="---",
+            author=HR_ASSISTANT,
+            parent_id=breakdown_msg_id
+        ).send()
 
 
 async def process_applications_and_cvs(
@@ -182,6 +267,19 @@ async def upload_and_extract_text(
     return application_docs
 
 
+def clean_skills_lists(matching_skills: List[str], missing_skills: List[str]) -> Tuple[List[str], List[str]]:
+    """Remove any skills that appear in both matching and missing skills lists."""
+    # Convert to sets for easier comparison
+    matching_set = {skill.lower().strip() for skill in matching_skills}
+    missing_set = {skill.lower().replace(' (desired)', '').strip() for skill in missing_skills}
+    
+    # Remove any skills from missing_set that are already in matching_set
+    cleaned_missing = [skill for skill in missing_skills 
+                      if skill.lower().replace(' (desired)', '').strip() not in matching_set]
+    
+    return matching_skills, cleaned_missing
+
+
 async def process_job_description_and_candidates(
     application_doc: Document, cv_documents: List[Document]
 ) -> List[CandidateProfile]:
@@ -226,6 +324,24 @@ async def process_job_description_and_candidates(
         # Process social skills
         social_kills = extract_social_skills(social_skill_result)
 
+        # Create default descriptions if not available
+        matching_skills_desc = getattr(match_skills_profile, 'matching_skills_description', 
+            "The candidate has demonstrated proficiency in these skills through their work experience.")
+        missing_skills_rec = getattr(match_skills_profile, 'missing_skills_recommendations',
+            "Consider pursuing training or certification in these areas to enhance qualifications.")
+        social_skills_desc = getattr(match_skills_profile, 'social_skills_description',
+            "These social skills were demonstrated through various professional interactions and team projects.")
+        candidate_summary = getattr(match_skills_profile, 'candidate_summary',
+            f"The candidate matches {len(match_skills_profile.matching_skills)} required skills with {len(match_skills_profile.missing_skills)} areas for development.")
+
+        # Clean up duplicate skills
+        cleaned_matching, cleaned_missing = clean_skills_lists(
+            match_skills_profile.matching_skills,
+            match_skills_profile.missing_skills
+        )
+        match_skills_profile.matching_skills = cleaned_matching
+        match_skills_profile.missing_skills = cleaned_missing
+
         # Process career
         education_career_dict = None
         if "function" in education_result:
@@ -247,8 +363,12 @@ async def process_job_description_and_candidates(
                 document=application_doc,
                 matched_skills_profile=MatchSkillsProfileJson(
                     matching_skills=match_skills_profile.matching_skills,
+                    matching_skills_description=matching_skills_desc,
                     missing_skills=match_skills_profile.missing_skills,
+                    missing_skills_recommendations=missing_skills_rec,
                     social_skills=social_kills,
+                    social_skills_description=social_skills_desc,
+                    candidate_summary=candidate_summary
                 ),
                 education_career_profile=education_career_json,
                 score=0,
@@ -283,17 +403,16 @@ async def process_generic_extraction(
     llm_chain: LLMChain,
     sources: List[str],
     msg_prefix: str = "",
-    author: str = "LLM"  # Add default author parameter
+    author: str = "LLM"
 ) -> Tuple[str, Dict]:
-    # Convert string to Path object
     source_paths = [Path(source) for source in sources]
     source_dict = {}
     
     for input_item, source in zip(input_list, source_paths):
         source_name = source.name
         await cl.Message(
-            content=f"{msg_prefix} Processing {source_name}. Please wait ...",
-            author=author  # Use the author parameter
+            content=f"{msg_prefix} Analyzing {source_name} 🔄",
+            author=author
         ).send()
         try:
             result = await asyncify(llm_chain.predict)(
@@ -339,20 +458,30 @@ def extract_sources_input_list(
 
 
 async def render_skills(match_skills_profile: MatchSkillsProfileJson, msg_id: str):
-    matching_skills = render_skills_str(
-        "Matching Skills\n", match_skills_profile.matching_skills
-    )
-    await cl.Message(
-        content=matching_skills, author=LLM_AUTHOR, parent_id=msg_id
-    ).send()
-    missing_skills = render_skills_str(
-        "Missing Skills\n", match_skills_profile.missing_skills
-    )
-    await cl.Message(content=missing_skills, author=LLM_AUTHOR, parent_id=msg_id).send()
-    social_skills = render_skills_str(
-        "Social Skills\n", match_skills_profile.social_skills
-    )
-    await cl.Message(content=social_skills, author=LLM_AUTHOR, parent_id=msg_id).send()
+    # Matching Skills Section
+    matching_skills_content = "### Matching Skills\n"
+    for skill in match_skills_profile.matching_skills:
+        matching_skills_content += f"- {skill}\n"
+    matching_skills_content += f"\n**Experience:**\n{match_skills_profile.matching_skills_description}\n"
+    await cl.Message(content=matching_skills_content, author=LLM_AUTHOR, parent_id=msg_id).send()
+    
+    # Missing Skills Section
+    missing_skills_content = "### Missing Skills\n"
+    for skill in match_skills_profile.missing_skills:
+        missing_skills_content += f"- {skill}\n"
+    missing_skills_content += f"\n**Recommendations:**\n{match_skills_profile.missing_skills_recommendations}\n"
+    await cl.Message(content=missing_skills_content, author=LLM_AUTHOR, parent_id=msg_id).send()
+    
+    # Social Skills Section
+    social_skills_content = "### Social Skills\n"
+    for skill in match_skills_profile.social_skills:
+        social_skills_content += f"- {skill}\n"
+    social_skills_content += f"\n**Demonstrated Through:**\n{match_skills_profile.social_skills_description}\n"
+    await cl.Message(content=social_skills_content, author=LLM_AUTHOR, parent_id=msg_id).send()
+    
+    # Overall Summary
+    summary_content = "### Candidate Summary\n" + match_skills_profile.candidate_summary
+    await cl.Message(content=summary_content, author=LLM_AUTHOR, parent_id=msg_id).send()
 
 
 async def render_education(

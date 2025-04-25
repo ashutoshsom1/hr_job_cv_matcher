@@ -11,14 +11,15 @@ from hr_job_cv_matcher.log_init import logger
 
 def convert_to_doc(file: chainlit.types.AskFileResponse) -> Document:
     path = write_to_temp_folder(file)
-    source = path.absolute()
+    # Store the absolute path to ensure we can find the file later
+    source = str(path.absolute())
     content = extract_text_from_pdf(path)
     
     if content is None or content.strip() == "":
         logger.error(f"Failed to extract text from {path}")
         raise Exception(f"Could not extract text from {path}. Please ensure the PDF is text-based or properly scanned.")
     
-    return Document(page_content=content, metadata={'source': str(source)})
+    return Document(page_content=content, metadata={'source': source})
 
 
 

@@ -12,18 +12,33 @@ from hr_job_cv_matcher.log_init import logger
 
 class MatchSkillsProfileJson(dict):
     matching_skills: List[str]
+    matching_skills_description: str
     missing_skills: List[str]
+    missing_skills_recommendations: str
     social_skills: List[str]
+    social_skills_description: str
+    candidate_summary: str
 
-    def __init__(self, matching_skills: List[str], missing_skills: List[str], social_skills: List[str]) -> None:
+    def __init__(self, matching_skills: List[str], matching_skills_description: str,
+                 missing_skills: List[str], missing_skills_recommendations: str,
+                 social_skills: List[str], social_skills_description: str,
+                 candidate_summary: str) -> None:
         self.matching_skills = matching_skills
+        self.matching_skills_description = matching_skills_description
         self.missing_skills = missing_skills
+        self.missing_skills_recommendations = missing_skills_recommendations
         self.social_skills = social_skills
+        self.social_skills_description = social_skills_description
+        self.candidate_summary = candidate_summary
         dict.__init__(
             self,
             matching_skills=self.matching_skills,
+            matching_skills_description=self.matching_skills_description,
             missing_skills=self.missing_skills,
+            missing_skills_recommendations=self.missing_skills_recommendations,
             social_skills=self.social_skills,
+            social_skills_description=self.social_skills_description,
+            candidate_summary=self.candidate_summary
         )
 
     @classmethod
