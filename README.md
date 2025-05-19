@@ -28,6 +28,9 @@ poetry install
 
 You will need to have a .env file with the following system variables:
 
+## RUN
+chainlit run .\hr_job_cv_matcher\ui\matcher_chainlit.py --port 5000
+
 ```bash
 OPENAI_API_KEY=<open api key>
 # OPENAI_MODEL=gpt-3.5-turbo-0613
